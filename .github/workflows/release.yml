@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Run Build and Release Script
+        run: |
+          # Initialize output directory
+          DIST_DIR="dist"
+          mkdir -p "$DIST_DIR"
+          
+          # Application info
+          APP_NAME="dnsgen"
+          PACKAGE_PATH="."
+          
+          # Platforms to build for: "OS/ARCH"
+          PLATFORMS=(
+            "linux/amd64" "linux/arm64" "darwin/amd64" "darwin/arm64" "windows/amd64" "windows/arm64"
+            "linux/mipsle" "linux/mips" "linux/mips64" "linux/mips64le" "linux/arm" "linux/386"
+          )
+          
+          echo "Starting cross-compilation..."
+          
+          for platform in "${PLATFORMS[@]}"; do
+            IFS="/" read -r -a parts <<< "$platform"
+            GOOS="${parts[0]}"
+            GOARCH="${parts[1]}"
+            
+            SUFFIX=""
+            if [ "$GOOS" = "windows" ]; then
+              SUFFIX=".exe"
+            fi
+            
+            OUTPUT_NAME="${APP_NAME}_${GOOS}_${GOARCH}${SUFFIX}"
+            OUTPUT_PATH="${DIST_DIR}/${OUTPUT_NAME}"
+            
+            echo "Building for $GOOS/$GOARCH..."
+            
+            # Compile binary statically (no external dependencies, critical for OpenWrt)
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -ldflags="-s -w" -o "$OUTPUT_PATH" "$PACKAGE_PATH"
+            
+            # Package binary into archive formats
+            if [ "$GOOS" = "windows" ]; then
+              zip -q -j "${OUTPUT_PATH}.zip" "$OUTPUT_PATH"
+            else
+              tar -czf "${OUTPUT_PATH}.tar.gz" -C "$DIST_DIR" "$OUTPUT_NAME"
+            fi
+            rm "$OUTPUT_PATH"
+          done
+          
+          # Create SHA256 checksums
+          cd "$DIST_DIR"
+          sha256sum * > ../checksums.txt
+          cd ..
+          
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
